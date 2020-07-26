@@ -1,0 +1,267 @@
+---
+title: "Trees in Equinox Analysis"
+author: "Hongrui Shan"
+date: "7/25/2020"
+output: 
+  html_document:
+    highlight: tango
+    toc: yes
+    toc_depth: 4
+---
+
+### Equinox Dataset
+
+```{r}
+# Loading  Dataset
+Equinox <-read.csv("LUC/Capstone/Equinox1.csv")
+dim(Equinox)
+```
+
+### Exploratory Analysis
+
+In Equinox dataset, there are 3696 observations and 13 variables, which include many categorical and quantitative variables, such as `mileages`, `year`, `trim`, `fuel_type` and so on.
+
+My goal is analyzing about how the car price influenced by different variables, which are the significant factors that affected price goes down or goes up. I will use  Classification Tree, Random Forest and Confusion Matrix in this analysis.
+
+```{r}
+str(Equinox)
+```
+
+### Data Preparation
+
+
+```{r}
+#mean of price
+mean(Equinox$price)
+median(Equinox$price)
+```
+
+#### Split levels
+
+Based on Equinox average price and median price, I selected one middle number which is 16000 as standard to split price levels.   
+price > 16000: High sales     
+price < 16000: Low sales
+```{r}
+Equinox <- Equinox[,-c(1)]
+#split imdb_score into several level: low or high
+Equinox$high_sales <- factor(ifelse(Equinox$price <= 16000, "No", "Yes"))
+summary(Equinox$high_sales)
+```
+
+#### Split Test & Train
+
+```{r}
+set.seed(001)
+# Then we created test and train sets 
+
+splitIndex1 <- sample(nrow(Equinox), size=.7*nrow(Equinox), replace=F)
+traindf1 <- Equinox[ splitIndex1,]
+testdf1  <- Equinox[-splitIndex1,]
+```
+
+### Simple Decision Trees
+
+If you have not already, please make sure to install.packages("rpart") and install.packages("rpart.plot") before attempting to load these libraries.
+
+```{r}
+# Load the necessary libraries  
+library(rpart)
+library(rpart.plot)
+```
+
+#### Fit an Initial Classification Tree   
+
+To begin with, I will start by using all available variables to predict `price`.
+
+```{r}
+tree.1 <-rpart(formula = high_sales ~.-price, data = traindf1, control = rpart.control(cp=0,minsplit = 10,xval = 10))
+rpart.plot(tree.1,box.palette = "RdBu", shadow.col = "gray", nn=TRUE)
+```
+
+The Full tree model is hard to read, we need to build pruned tree.
+
+#### Evaluate the CP 
+
+```{r}
+# check complexity parameter
+printcp(tree.1)
+```
+
+```{r}
+#plot Complexity parameter
+plotcp(tree.1,minline = TRUE)
+```
+
+Based on the above we can determine that the complexity parameter that minimizes cross-validation error is 0.00227. So next, we fit a pruned tree with that complexity parameter.
+
+#### Fitting a Pruned Tree
+
+```{r}
+# plot Pruned tree
+tree.2 <-rpart(formula = high_sales ~.-price, data = traindf1, control = rpart.control(cp=0.00227,minsplit = 200,xval = 70))
+rpart.plot(tree.2,box.palette = "RdBu", shadow.col = "gray", nn=TRUE)
+```
+
+Based on pruned decision tree, `fuel_type`,`miles`,`dom` and `trim` are significant predictors for `price`.
+As we can see, R using `fuel_type` made the first split.41% of cars which are not E85/Unleaded are high sales, 59% of cars are low sales.           
+Among 41% of high sales Equinox, 23% of cars without E85 fuel type and have less than 89 days on market.7% of cars with E85 fuel type, less than 116 days on market and less than 24000 miles. 3% of Equinox without E85 fuel type,less than 89 days on market and less than 17000 miles.    
+Among 59% of low sales Equinox, 10% of cars without E85 fuel type, over 89 days on market, over 17000 miles and with FWD drivetrain. 32% of cars with E85, over 30000 miles, with LT,LS trim type. 11% of cars with E85, less 30000 miles, over 116 days on market.
+
+
+#### Model Performance
+
+**Training Set Confusion Matrix: Full Tree**
+
+```{r}
+# load caret package
+library(caret)
+library(ggplot2)
+library(lattice)
+```
+
+```{r}
+cm_full_train <- confusionMatrix(data = predict(tree.1,type="class"),
+                reference = traindf1[,"high_sales"], 
+                positive = "Yes",
+                mode = "everything")
+cm_full_train
+```
+
+**Training Set Confusion Matrix: Pruned Tree**
+```{r}
+cm_pruned_train <- confusionMatrix(data = predict(tree.2,type="class"),
+                                   reference = traindf1[,"high_sales"], 
+                                   positive = "Yes",
+                                   mode = "everything")
+cm_pruned_train
+```
+
+#### Holdout Analysis
+
+**Test Set Confusion Matrix: Full Tree**
+
+```{r}
+cm_full_test <- confusionMatrix(data = predict(tree.1,
+                                               type="class",
+                                               newdata = testdf1),
+                                reference = testdf1[,"high_sales"], 
+                                positive = "Yes",
+                                mode = "everything")
+cm_full_test
+```
+
+**Test Set Confusion Matrix: Pruned Tree**
+
+```{r}
+cm_pruned_test <- confusionMatrix(data = predict(tree.2,
+                                               type="class",
+                                               newdata = testdf1),
+                                reference = testdf1[,"high_sales"], 
+                                positive = "Yes",
+                                mode = "everything")
+cm_pruned_test
+```
+
+Below is a table showing how well the Full Tree performed in hold out:
+
+```{r}
+data.frame(Full_Tree_Accuracy = c(
+    cm_full_train$overall[1],
+    cm_full_test$overall[1],
+    cm_full_train$overall[1]-cm_full_test$overall[1]
+    ), Full_Tree_Precision = c(
+        cm_full_train$byClass[5],
+        cm_full_test$byClass[5],
+        cm_full_train$byClass[5]-cm_full_test$byClass[5]
+    ), Full_Tree_Recall = c(
+        cm_full_train$byClass[6],
+        cm_full_test$byClass[6],
+        cm_full_train$byClass[6]-cm_full_test$byClass[6]
+    ), Full_Tree_Specificity = c(
+        cm_full_train$byClass[2],
+        cm_full_test$byClass[2],
+        cm_full_train$byClass[2]-cm_full_test$byClass[2]
+    ), Full_Tree_F1 = c(
+        cm_full_train$byClass[7],
+        cm_full_test$byClass[7],
+        cm_full_train$byClass[7]-cm_full_test$byClass[7]
+    ),
+    row.names = c("Training", "Holdout", "Fallout")
+           )
+```
+
+use the F1 score to evaluate between these two models:
+
+```{r}
+data.frame(Full_Tree_F1 = c(
+        cm_full_train$byClass[7],
+        cm_full_test$byClass[7],
+        cm_full_train$byClass[7]-cm_full_test$byClass[7]
+    ), Pruned_Tree_F1 = c(
+        cm_pruned_train$byClass[7],
+        cm_pruned_test$byClass[7],
+        cm_pruned_train$byClass[7]-cm_pruned_test$byClass[7]
+        ),
+    row.names = c("Training", "Holdout", "Fallout")
+           )
+```
+
+### Random Forest
+
+```{r}
+#install.packages("randomForest")
+library(randomForest)
+```
+
+```{r}
+set.seed(001)
+
+rf1 <- randomForest(formula=high_sales~.-price,data=traindf1, importance = TRUE)
+rf1
+```
+
+By default, randomForest will fit a forest of 500 trees.We are able to change the number of trees the model fits with the `ntree` argument and we also can change the number of variables to randomly try at each split with the `mtry` parameter.
+
+For now, lets leave the defaults and see how this model holds up on our test set.     
+**ConfusionMatrix in Train dataset**    
+```{r}
+cm_rf_train <- confusionMatrix (data = predict(rf1,type="class"),
+                                   reference = traindf1[,"high_sales"], 
+                                   positive = "Yes",
+                                   mode = "everything")
+cm_rf_train
+```
+
+**ConfusionMatrix in Test dataset**     
+```{r}
+cm_rf_test <- confusionMatrix(data = predict(rf1,
+                                             type="class", 
+                                             newdata = testdf1),
+                                   reference = testdf1[,"high_sales"], 
+                                   positive = "Yes",
+                                   mode = "everything")
+cm_rf_test
+```
+
+#### Holdout Analysis
+
+```{r}
+data.frame(RandomForest_F1 = c(
+        cm_rf_train$byClass[7],
+        cm_rf_test$byClass[7],
+        cm_rf_train$byClass[7]-cm_rf_test$byClass[7]
+    ), row.names = c("Training", "Holdout", "Fallout"))
+```
+
+Holdout table shows above, the fallout is very low, which means RandomForest is stable.
+
+#### Variable Importance
+
+```{r}
+importance(rf1, type = 1)
+```
+
+```{r}
+varImpPlot (rf1, type = 1, pch = 16)
+```
+
